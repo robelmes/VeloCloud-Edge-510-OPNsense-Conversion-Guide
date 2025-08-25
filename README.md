@@ -90,7 +90,7 @@ Next, flash the DMI (I don't know what this is, but it's all over the netgate fo
 
 Follow that with this command: `./dmi-tool -w -p EDGE510 -v 1`
 
-Finally, flash that firmware by running `flashrom --programmer internal illegal-firmware/2017-4-10-coreboot.rom` and let it install. Once finished, proceed.
+Finally, flash that firmware by running `flashrom --programmer internal --write illegal-firmware/2017-4-10-coreboot.rom` and let it install. Once finished, proceed.
 
 **FINISH HIM!!!** - to finalize getting rid of that *pesky watchdog* timer that prohibits us from running whatever we want, run the following, in order:
 `i2cset -y 1 0x24 0x00 0x00`
