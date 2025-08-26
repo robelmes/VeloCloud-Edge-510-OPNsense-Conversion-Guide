@@ -118,6 +118,10 @@ Now, plug in your USB-drive with the OPNSense installer, and plug your device ba
 
 Once it boots, it should boot into the OPNsense installer, you will lose view of the installer as it's a VGA installer, this is OK. We're going to SSH into the device with your computer.
 
+Plug your 'internet connection' into GE2 and your computer's ethernet into GE1 (I don't know why, but OPNsense flips the WAN/LAN ports, you can it it straight later.)
+
+Your device should automatically get a DHCP address from OPNsense once it boots up. If it doesn't, something is wrong, check your install media and start over from the beginning of this step.
+
 SSH into the device using the credentials `installer | opnsense` and follow the on-screen directions, picking a language, and keyboard type.
 
 Then, install using UFS (ZFS seems silly here since we only have 1 physical storage device, the onboard flash), and select the onboard flash as your target.
