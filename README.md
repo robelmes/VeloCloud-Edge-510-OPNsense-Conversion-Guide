@@ -32,6 +32,8 @@ To begin, you'll need to download a few programs:
 
 ## Step 2: Disassembly:
 
+# UPDATE: YOU CAN SKIP THIS STEP NOW UNLESS YOU ABSOLUTELY NEED A SCREEN!!! JUMP TO STEP 5!!!
+
 Start by removing the serial-port / SIM-card slot cover on the side with the ethernet ports, there should be 1 screw and it should come right off, exposing the mini-USB port. You should be able to plug that into a PC, and connect at 115200 Baud.
 
 Then, remove all 4 feet, and the 4 star-bit screws holding the shell to the top of the device.
@@ -110,17 +112,19 @@ OPNSense? ***THAT'S WHY YOU'RE HERE!***
 
 ## Step 6: Install OPNsense:
 
-Now, unplug your device, turn on your ATX power supply, then plug in your USB-drive with the OPNSense installer, and plug your device back in. It should begin to boot. (Fun-fact, the device prioritizes USB-Boot first, so no intervention is required!)
+Now, plug in your USB-drive with the OPNSense installer, and plug your device back in. It should begin to boot. (Fun-fact, the device prioritizes USB-Boot first, so no intervention is required!)
 
 (You'll know if step 5 worked if you see a line that says: `Disabling Watchdog timer... done.`)
 
-Once it boots up, feel free to customize interface assignments if you want, I personally opt to do this, but it's totally up to you.
+Once it boots, it should boot into the OPNsense installer, you will lose view of the installer as it's a VGA installer, this is OK. We're going to SSH into the device with your computer.
+
+SSH into the device using the credentials `installer | opnsense` and follow the on-screen directions, picking a language, and keyboard type.
 
 Then, install using UFS (ZFS seems silly here since we only have 1 physical storage device, the onboard flash), and select the onboard flash as your target.
 
 Allow it to install, then change your root password (please lord god do this lol) and shutdown.
 
-Remove the Mini-PCIe to PCIe kit, button up the device, and *presto!* You've turned this literal e-waste router into a new-fancy router for the modern age! 
+*presto!* You've turned this literal e-waste router into a new-fancy router for the modern age!
 
 **Look at you, superstar!**
 
@@ -134,7 +138,11 @@ Remove the Mini-PCIe to PCIe kit, button up the device, and *presto!* You've tur
 
 <img src="https://raw.githubusercontent.com/PhoenixSheppy/VeloCloud-Edge-510-OPNsense-Conversion-Guide/refs/heads/main/pics/multi_core_test.jpg" height="250">
 
-* The M-key Slot on the motherboard does not work, as far as I know it does not show up in any OS I've tested, and cannot be used to boot from.
+* The M-key Slot on the motherboard does not work, as far as I know it does not show up in any OS I've tested, and cannot be used to boot from. (It does work with a PCie LTE Card on the 'LTE' SKUs!)
+
+* Speaking of LTE, yes, the LTE Sierra Wireless Snapdragon-X7 LTE-A card that comes in the -LTE SKUs does work with OPNSense!
+
+* The wireless-AC also works with OPNsense in the event that you choose to keep it!
 
 * If you're worried about the internal flash dying, if/when it dies, boot priority is pre-configured to boot from USB first, so it'll work fine with a slim-USB drive in a pinch.
 
