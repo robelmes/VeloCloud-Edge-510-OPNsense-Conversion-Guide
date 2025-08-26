@@ -84,7 +84,11 @@ From there, let's go ahead and network this bad-boy. Plug in an ethernet cable f
 
 Make a directory in /root, for simplicity, I'm going to name it "illegal-firmware" by running `mkdir illegal-firmware` because that sounds bad-ass.
 
+Next, cd into that directory we just created `cd illegal-firmware`
+
 Then, grab a copy of that BIOS from earlier, by running `wget https://raw.githubusercontent.com/PhoenixSheppy/VeloCloud-Edge-510-OPNsense-Conversion-Guide/refs/heads/main/firmware/2017-4-10-coreboot.rom` and allow it to download to your new directory.
+
+Pop back out to the root directory `cd ..`
 
 Next, flash the DMI (I don't know what this is, but it's all over the netgate forum, so we're doing it) using this command: `./dmi-tool -u illegal-firmware/2017-4-10-coreboot.rom` 
 
