@@ -1,12 +1,6 @@
 # VeloCloud-Edge-510-OPNsense-Conversion-Guide
 These routers are [cheaper than dirt](https://www.ebay.com/itm/297261007996) on eBay (sub-$20/unit!), and they're just x86 boxes disguised as fancy cloud-managed routers, so let's repurpose them!
 
-## Woah there, not feeling up to the task? That's okay! I've started selling these on eBay pre-modded, no scary steps required!
-
-You can grab one on my [eBay store](https://www.ebay.com/itm/136368366528) for $45 US + $5 shipping, drop on by and take a look! I only charge for the hours I put into building and preparing + eBay face value!
-
-I JUST restocked my eBay store, so go get 'em! 3 this time around, if they sell out, they're gone forever, I'm done making these! I had my fun!
-
 ## Why do we need to do this?
 VeloCloud (VMware, Dell, VMware??) decided in their infinite wisdom to configure this device so that if you try any sketchy stuff, like running an unsupported (unauthorized) OS it won't work.
 
