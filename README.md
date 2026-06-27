@@ -156,7 +156,7 @@ Without any fixes, you'd see bootloader output (from COM2) then silence — the 
 
 Under **System → Settings → Administration → Console**, configure as follows:
 
-<img src="pics/console-settings.png" height="350">
+<img src="pics/console-settings-v2.png" height="350">
 
 | Setting | Value |
 |---------|-------|
