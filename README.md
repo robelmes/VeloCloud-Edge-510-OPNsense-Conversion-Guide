@@ -136,29 +136,27 @@ Allow it to install, then change your root password (please lord god do this lol
 
 ## Step 7: Headless Serial Console Setup (No GPU Required)
 
-After installing OPNsense, you can manage the device entirely over serial — no GPU, no HDMI, no monitor needed. However, there are two OPNsense quirks that need fixing before serial login works properly.
+After installing OPNsense, you can manage the device entirely over serial — no GPU, no HDMI, no monitor needed. Two things need configuring to make this work properly.
 
 > **Tested on:** OPNsense 26.1.6_2 (amd64)
-> These issues have been reported to the OPNsense project as [opnsense/core#10463](https://github.com/opnsense/core/issues/10463). Check that issue to see if a fix has been merged — if so, some or all of the steps below may no longer be necessary.
+> The underlying hardware quirk has been reported to the OPNsense project as [opnsense/core#10463](https://github.com/opnsense/core/issues/10463). Check that issue to see if it has been addressed natively.
 
 ### Background: How the serial port works on this hardware
 
 The mini-USB port under the side cover exposes **two hardware UARTs** via an internal USB-to-serial chip:
 
-- **COM1 (0x3F8)** — FreeBSD calls this `ttyu0`, and it's where the FreeBSD kernel sends its console output by default
-- **COM2 (0x2F8)** — FreeBSD calls this `ttyu1`, and this is the port that coreboot and the FreeBSD bootloader use for their output
+- **COM1 (0x3F8)** — FreeBSD calls this `ttyu0`, where the FreeBSD kernel sends console output by default
+- **COM2 (0x2F8)** — FreeBSD calls this `ttyu1`, where coreboot and the FreeBSD bootloader send their output
 
-Without any fixes, you'd see bootloader/module-loading output (from COM2) but then silence during OPNsense startup (which goes to COM1). No login prompt ever appears — `getty` is configured for `ttyU1` (uppercase) but the actual FreeBSD device node is `ttyu1` (lowercase), so it can't open the port.
+Although the port is physically connected via USB, coreboot presents both UARTs to FreeBSD as **native hardware UARTs** (not USB devices). FreeBSD therefore names them `ttyu0`/`ttyu1` (lowercase u, UART driver) — not `ttyU0`/`ttyU1` (uppercase U, USB ucom driver).
 
-The fixes below address both issues and persist across reboots.
+Without any fixes, you'd see bootloader output (from COM2) then silence — the kernel switches to COM1 and no login prompt appears.
 
-### Required OPNsense console settings
+### Step 1: OPNsense console settings
 
-Before applying the fixes, ensure your OPNsense console is configured correctly under **System → Settings → Administration → Console**:
+Under **System → Settings → Administration → Console**, configure as follows:
 
 <img src="pics/console-settings.png" height="350">
-
-The key settings are:
 
 | Setting | Value |
 |---------|-------|
@@ -166,14 +164,14 @@ The key settings are:
 | Primary Console | Serial Console |
 | Secondary Console | Serial Console |
 | Serial Speed | 115200 |
-| USB-based serial | Use USB-based serial ports ✅ |
+| USB-based serial | ☐ **Leave unchecked** |
 | Console menu | Password protect the console menu ✅ |
 
-> **Note:** "USB-based serial" must be enabled — this is what causes OPNsense to generate the `ttyU` entries in `/etc/ttys` that the fixes below target.
+> **Important:** Leave "USB-based serial" **unchecked**. When enabled, OPNsense writes `ttyU` (uppercase) entries in `/etc/ttys` — but the actual device nodes on this hardware are `ttyu` (lowercase). Leaving it unchecked causes OPNsense to generate the correct lowercase entries that match the real device nodes.
 
-### Fix 1: Full boot output on serial
+### Step 2: Point the kernel console to COM2
 
-Add `comconsole_port="0x2f8"` to `/boot/loader.conf.local` to tell the FreeBSD kernel to use COM2 (the same port as the bootloader and your mini-USB):
+By default the FreeBSD kernel uses COM1, but coreboot and the bootloader use COM2 (your mini-USB connection). Add the following to `/boot/loader.conf.local` via SSH or the OPNsense shell:
 
 ```sh
 cat > /boot/loader.conf.local << 'EOF'
@@ -182,59 +180,13 @@ comconsole_port="0x2f8"
 EOF
 ```
 
-### Fix 2: Serial login (persistent, survives reboots)
-
-There are **two separate bugs** that prevent serial console login from working:
-
-**Bug 1 — ttyU/ttyu case mismatch (no login prompt):**
-OPNsense generates `/etc/ttys` with entries for `ttyU0` and `ttyU1` (uppercase U) when `serialusb` is set in its config. The actual FreeBSD device nodes are `ttyu0`/`ttyu1` (lowercase u). This means `getty` is configured for devices that don't exist — no login prompt appears.
-
-**Bug 2 — ttyname() symlink resolution (silent root denial):**
-Creating symlinks `ttyU0→ttyu0` makes `getty` work and a login prompt appears, but FreeBSD's `login` command calls `ttyname()` to look up the terminal in `/etc/ttys`. Since `ttyname()` resolves symlinks, it returns `ttyu1` (lowercase) — which has no `/etc/ttys` entry. Without a matching entry marked `secure`, FreeBSD silently denies root login before ever prompting for a password.
-
-Both are fixed by a single syshook script using OPNsense's own persistence mechanism (runs after OPNsense's boot configuration at `20-freebsd`):
-
-```sh
-cat > /usr/local/etc/rc.syshook.d/start/99-serial-console << 'EOF'
-#!/bin/sh
-
-# Fix serial console login on VeloCloud Edge 510.
-# Must run after 20-freebsd which calls system_login_configure().
-
-# Bug 1: OPNsense writes ttyU (uppercase) in /etc/ttys but FreeBSD device
-# nodes are ttyu (lowercase). Create symlinks so getty can open them.
-ln -sf /dev/ttyu0 /dev/ttyU0
-ln -sf /dev/ttyu0.init /dev/ttyU0.init
-ln -sf /dev/ttyu0.lock /dev/ttyU0.lock
-ln -sf /dev/ttyu1 /dev/ttyU1
-ln -sf /dev/ttyu1.init /dev/ttyU1.init
-ln -sf /dev/ttyu1.lock /dev/ttyU1.lock
-
-# Bug 2: FreeBSD login(1) calls ttyname() which resolves symlinks, returning
-# 'ttyu1' (lowercase). Without a 'secure' entry in /etc/ttys, login silently
-# denies root before prompting for a password.
-# 'off' = no duplicate getty spawned, 'secure' = root login permitted.
-for tty in ttyu0 ttyu1; do
-    if ! grep -q "^${tty}" /etc/ttys; then
-        echo "${tty}  none  vt100  off secure" >> /etc/ttys
-    fi
-done
-
-# Signal init to re-read /etc/ttys
-kill -HUP 1
-EOF
-
-chmod +x /usr/local/etc/rc.syshook.d/start/99-serial-console
-```
-
 ### Verifying it works
 
 Reboot the device. You should see:
 
-1. Full OPNsense boot sequence on your serial terminal (services starting, syshook output, etc.)
-2. `>>> Invoking start script 'serial-console'` followed by `OK` — confirming the syshook ran
-3. The OPNsense banner and a `login:` prompt on `ttyU1`
-4. Successful login with your `root` credentials
+1. Full OPNsense boot sequence on your serial terminal
+2. A `login:` prompt on `ttyu1`
+3. Successful login with your `root` credentials
 
 From this point the device is fully headless — no GPU, no monitor, serial console only.
 
