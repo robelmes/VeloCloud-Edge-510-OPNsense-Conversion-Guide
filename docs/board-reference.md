@@ -132,19 +132,20 @@ factory QC marking.
 ### TPM 2.0
 
 <img src="../pics/board/u42-tpm.jpg" width="700" alt="U42 Infineon SLB9665TT20 TPM 2.0">
-
 The board includes an **Infineon SLB9665TT20 TPM 2.0** chip. OPNsense can use this for
 measured boot and key storage if desired.
 
 ### BIOS / Coreboot Flash
 
-<img src="../pics/board/u54-spi-flash-u59.jpg" width="700" alt="U54 Winbond W25Q64ES SPI NOR flash">
+<img src="../pics/board/u54-spi-flash.jpg" width="700" alt="U54 Winbond W25Q64ES SPI NOR flash">
 
 The coreboot BIOS is stored on a **Winbond W25Q64ES 8 MB SPI NOR flash** (U54). J20 (the
 2×4 header immediately adjacent) is the probable SPI/JTAG programming interface for firmware
 recovery. The chip can also be programmed directly with a clip programmer if needed.
 
 ### Wireless MCU
+
+<img src="../pics/board/u14-cc2650.jpg" width="700" alt="U14 TI CC2650 wireless MCU">
 
 The **TI CC2650** (U14) is a 2.4 GHz multiprotocol wireless MCU supporting Bluetooth LE,
 ZigBee, and 802.15.4. VeloCloud used this for out-of-band Bluetooth-based device
@@ -186,8 +187,9 @@ These footprints are present on the PCB but not populated in the standard Edge 5
 | `j19-j20-spi-flash.jpg` | J19 mini-PCIe, J20 JTAG header, U54 SPI flash |
 | `u35-u36-u49-u52-area.jpg` | U52 PIC, U35/U36 power ICs, surrounding area |
 | `u38-soc-j6.jpg` | U38 Marvell SoC, J6 header |
-| `u42-tpm.jpg` | U42 TPM 2.0 |
+| `u14-cc2650.jpg` | U14 TI CC2650 wireless MCU |
+| `u42-tpm.jpg` | U42 Infineon SLB9665TT20 TPM 2.0 |
 | `u52-pic16f18344.jpg` | U52 PIC16F18344 (paint scraped for legibility) |
 | `u53-marvell-88e1543.jpg` | U53 Marvell 88E1543 Ethernet PHY, J11 |
-| `u54-spi-flash-u59.jpg` | U54 W25Q64ES SPI flash, U59, Y6 crystal |
+| `u54-spi-flash.jpg` | U54 W25Q64ES SPI flash, U59, Y6 crystal |
 | `u61-u62-serial-chain.jpg` | U62 CP2104 USB-UART, U61 TLV3126 level translator |
