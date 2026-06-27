@@ -48,7 +48,7 @@ processor is confirmed x86 (FreeBSD/amd64 runs natively via coreboot).
 | J14 | Pin header | 3 | No (unpopulated) | Unknown — near USB-to-serial conversion circuitry |
 | J15 | Pin header | 3 | Yes | Unknown — near USB-to-serial conversion circuitry |
 | J16 | Pin header | 3 | Yes | Unknown — near USB-to-serial conversion circuitry |
-| J17 | USB-A | — | Yes | Internal USB-A (serial conversion chain) |
+| J17 | USB-A | — | Yes | Internal USB-A — connects external mini-USB serial port directly to U62 (CP2104) |
 | J18 | M.2 slot | — | Yes | **M.2 slot** — storage SSD |
 | J19 | mini-PCIe | — | Yes | mini-PCIe slot (WLE600VX wireless card fitted as standard) |
 | J20 | Pin header | 8 (2×4) | Yes | **Probable JTAG / SPI programming interface** (next to SPI flash U54) |
@@ -89,7 +89,7 @@ Edge 510). J22 is the paired SIM card slot. Together these support an M.2 cellul
 |-----|---------|------|---------|
 | U53 | `Marvell 88E1543-LKJ2` | **Marvell 88E1543** | 4-port Gigabit Ethernet PHY (drives J11 4× RJ45) |
 | U38 | `OKA17 JY995` (Marvell logo) | **Marvell networking SoC** | Networking processor / switch fabric |
-| U41 | `SMSC USB2244-06` | **Microchip USB2244** | 4-port USB 2.0 hub (drives J4, J7, J17) |
+| U41 | `SMSC USB2244-06` | **Microchip USB2244** | 4-port USB 2.0 hub (drives J4 and J7 external USB-A ports) |
 | U42 | `SLB9665TT20` | **Infineon SLB9665TT20** | TPM 2.0 |
 | U52 | `PIC16F 18344` | **Microchip PIC16F18344** | System management controller (power sequencing, watchdog, front panel) |
 | U54 | `25Q064ES,G` | **Winbond W25Q64ES** | 8 MB SPI NOR flash (coreboot BIOS) |
@@ -111,8 +111,10 @@ Edge 510). J22 is the paired SIM card slot. Together these support an M.2 cellul
 
 <img src="../pics/board/u61-u62-serial-chain.jpg" width="700" alt="U62 CP2104 USB-to-UART, U61 TLV3126 level translator">
 
-The serial console path: **mini-USB port → J7 → U41 (USB hub) → U62 (CP2104 USB-to-UART) →
+The serial console path: **external mini-USB port → J17 → U62 (CP2104 USB-to-UART) →
 U61 (TLV3126 level translator) → SoC UART**.
+
+U41 (USB2244 hub) is unrelated to the serial chain — it drives the external USB-A ports J4 and J7.
 
 The CP2104 (U62) explains why the device enumerates as a Silicon Labs USB serial adapter on
 the host PC. See the [conversion guide](../README.md) for how to use this for OPNsense
