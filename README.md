@@ -136,7 +136,7 @@ Allow it to install, then change your root password (please lord god do this lol
 
 ## Step 7: Headless Serial Console Setup (No GPU Required)
 
-After installing OPNsense, you can manage the device entirely over serial — no GPU, no HDMI, no monitor needed. However, there are a few OPNsense quirks that need fixing before serial login works properly.
+After installing OPNsense, you can manage the device entirely over serial — no GPU, no HDMI, no monitor needed. However, there are two OPNsense quirks that need fixing before serial login works properly.
 
 ### Background: How the serial port works on this hardware
 
@@ -145,9 +145,28 @@ The mini-USB port under the side cover exposes **two hardware UARTs** via an int
 - **COM1 (0x3F8)** — FreeBSD calls this `ttyu0`, and it's where the FreeBSD kernel sends its console output by default
 - **COM2 (0x2F8)** — FreeBSD calls this `ttyu1`, and this is the port that coreboot and the FreeBSD bootloader use for their output
 
-This means without any fixes, you'd see bootloader/module-loading output (from COM2) but then silence during OPNsense startup (which goes to COM1), followed by a login prompt on COM2. You'd also be unable to log in due to a PAM configuration issue.
+Without any fixes, you'd see bootloader/module-loading output (from COM2) but then silence during OPNsense startup (which goes to COM1), followed by a login prompt on COM2 — but root login would silently fail.
 
-The fixes below address all of this and make everything persist across reboots.
+The fixes below address both issues and persist across reboots.
+
+### Required OPNsense console settings
+
+Before applying the fixes, ensure your OPNsense console is configured correctly under **System → Settings → Administration → Console**:
+
+<img src="pics/console-settings.png" height="350">
+
+The key settings are:
+
+| Setting | Value |
+|---------|-------|
+| Console driver | Use the virtual terminal driver (vt) ✅ |
+| Primary Console | Serial Console |
+| Secondary Console | Serial Console |
+| Serial Speed | 115200 |
+| USB-based serial | Use USB-based serial ports ✅ |
+| Console menu | Password protect the console menu ✅ |
+
+> **Note:** "USB-based serial" must be enabled — this is what causes OPNsense to generate the `ttyU` entries in `/etc/ttys` that the fixes below target.
 
 ### Fix 1: Full boot output on serial
 
@@ -162,61 +181,25 @@ EOF
 
 ### Fix 2: Serial login (persistent, survives reboots)
 
-OPNsense generates `/etc/ttys` with entries for `ttyU0` and `ttyU1` (uppercase U, for USB serial) when `serialusb` is set in its config. However, the actual FreeBSD device nodes are `ttyu0` and `ttyu1` (lowercase u). This mismatch means `getty` is configured for devices that don't exist — so no login prompt appears.
+There are **two separate bugs** that prevent serial console login from working:
 
-Additionally, OPNsense's `/etc/pam.d/login` doesn't pass the required parameter to its PAM module, causing authentication to fail even if a prompt does appear.
+**Bug 1 — ttyU/ttyu case mismatch (no login prompt):**
+OPNsense generates `/etc/ttys` with entries for `ttyU0` and `ttyU1` (uppercase U) when `serialusb` is set in its config. The actual FreeBSD device nodes are `ttyu0`/`ttyu1` (lowercase u). This means `getty` is configured for devices that don't exist — no login prompt appears.
 
-Both issues need to be fixed and made persistent using OPNsense's own mechanisms.
+**Bug 2 — ttyname() symlink resolution (silent root denial):**
+Creating symlinks `ttyU0→ttyu0` makes `getty` work and a login prompt appears, but FreeBSD's `login` command calls `ttyname()` to look up the terminal in `/etc/ttys`. Since `ttyname()` resolves symlinks, it returns `ttyu1` (lowercase) — which has no `/etc/ttys` entry. Without a matching entry marked `secure`, FreeBSD silently denies root login before ever prompting for a password.
 
-#### 2a: PAM fix — make it persistent via OPNsense template system
-
-OPNsense regenerates PAM config from templates on every boot. Add a `login.pam` template so OPNsense generates a working `/etc/pam.d/login`:
-
-```sh
-# Create the login PAM template
-cat > /usr/local/opnsense/service/templates/OPNsense/Auth/login.pam << 'EOF'
-# $FreeBSD$
-#
-# login - auth-owner=root authenticate-with=opnsense
-#
-auth            sufficient      pam_opnsense.so         authtok_prompt=Password:
-auth            required        pam_unix.so             no_warn try_first_pass
-auth            optional        pam_group.so            no_warn group=wheel root_only fail_safe ruser
-auth            optional        pam_lastlog.so          no_warn
-
-account         required        pam_nologin.so
-account         required        pam_opnsense.so
-account         required        pam_unix.so
-account         required        pam_login_access.so
-
-password        required        pam_opnsense.so
-password        required        pam_unix.so             no_warn try_first_pass
-
-session         required        pam_lastlog.so          no_warn
-session         optional        pam_motd.so
-session         optional        pam_mail.so             no_warn quiet
-EOF
-
-# Register it in the template targets
-echo "login.pam:/etc/pam.d/login" >> /usr/local/opnsense/service/templates/OPNsense/Auth/+TARGETS
-
-# Apply immediately
-configctl template reload OPNsense/Auth
-```
-
-#### 2b: ttyU symlink fix — make it persistent via OPNsense syshook
-
-OPNsense has a syshook mechanism that runs scripts at specific points in the boot process. Create a script at `99-serial-console` (the high number ensures it runs after OPNsense's own console configuration at `20-freebsd`):
+Both are fixed by a single syshook script using OPNsense's own persistence mechanism (runs after OPNsense's boot configuration at `20-freebsd`):
 
 ```sh
 cat > /usr/local/etc/rc.syshook.d/start/99-serial-console << 'EOF'
 #!/bin/sh
 
-# Fix serial console: create ttyU symlinks and fix PAM login config.
+# Fix serial console login on VeloCloud Edge 510.
 # Must run after 20-freebsd which calls system_login_configure().
 
-# OPNsense writes ttyU (uppercase) in /etc/ttys when serialusb=1,
-# but the actual FreeBSD device nodes are ttyu (lowercase).
+# Bug 1: OPNsense writes ttyU (uppercase) in /etc/ttys but FreeBSD device
+# nodes are ttyu (lowercase). Create symlinks so getty can open them.
 ln -sf /dev/ttyu0 /dev/ttyU0
 ln -sf /dev/ttyu0.init /dev/ttyU0.init
 ln -sf /dev/ttyu0.lock /dev/ttyU0.lock
@@ -224,10 +207,17 @@ ln -sf /dev/ttyu1 /dev/ttyU1
 ln -sf /dev/ttyu1.init /dev/ttyU1.init
 ln -sf /dev/ttyu1.lock /dev/ttyU1.lock
 
-# Reload PAM templates to ensure login.pam is applied
-configctl template reload OPNsense/Auth
+# Bug 2: FreeBSD login(1) calls ttyname() which resolves symlinks, returning
+# 'ttyu1' (lowercase). Without a 'secure' entry in /etc/ttys, login silently
+# denies root before prompting for a password.
+# 'off' = no duplicate getty spawned, 'secure' = root login permitted.
+for tty in ttyu0 ttyu1; do
+    if ! grep -q "^${tty}" /etc/ttys; then
+        echo "${tty}  none  vt100  off secure" >> /etc/ttys
+    fi
+done
 
-# Signal init to re-read /etc/ttys and start gettys on the serial ports
+# Signal init to re-read /etc/ttys
 kill -HUP 1
 EOF
 
