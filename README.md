@@ -171,14 +171,15 @@ Under **System → Settings → Administration → Console**, configure as follo
 
 ### Step 2: Point the kernel console to COM2
 
-By default the FreeBSD kernel uses COM1, but coreboot and the bootloader use COM2 (your mini-USB connection). Add the following to `/boot/loader.conf.local` via SSH or the OPNsense shell:
+By default the FreeBSD kernel uses COM1, but coreboot and the bootloader use COM2 (your mini-USB connection). Create `/boot/loader.conf.local` via SSH or the OPNsense shell:
 
 ```sh
 cat > /boot/loader.conf.local << 'EOF'
-boot_multicons="YES"
 comconsole_port="0x2f8"
 EOF
 ```
+
+> **Why `loader.conf.local` and not the Tunables UI?** OPNsense's Tunables page writes entries into `/boot/loader.conf`, but after the console initialisation block. By the time the loader reaches the tunable, the console is already initialised on COM1. `/boot/loader.conf.local` is read after `/boot/loader.conf` and correctly overrides the port before the console is finalised. OPNsense never overwrites this file — it's safe across reboots and OPNsense updates.
 
 ### Verifying it works
 
