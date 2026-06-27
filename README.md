@@ -203,7 +203,7 @@ From this point the device is fully headless — no GPU, no monitor, serial cons
 
 * Speaking of LTE, yes, the LTE Sierra Wireless Snapdragon-X7 LTE-A card that comes in the -LTE SKUs does work with OPNSense!
 
-* The wireless-AC also works with OPNsense in the event that you choose to keep it!
+* The wireless-AC also works with OPNsense in the event that you choose to keep it! **Note:** This appears to apply to certain cards only. The COMPEX WLE600VX (QCA9880, 802.11ac) is detected on the PCI bus but has no FreeBSD driver — `ath10k` was never fully ported to FreeBSD. If you need wireless, replace it with an AR9xxx-based card supported by the `ath` driver.
 
 * If you're worried about the internal flash dying, if/when it dies, boot priority is pre-configured to boot from USB first, so it'll work fine with a slim-USB drive in a pinch.
 
