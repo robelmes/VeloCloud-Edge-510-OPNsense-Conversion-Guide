@@ -191,6 +191,10 @@ Reboot the device. You should see:
 
 From this point the device is fully headless — no GPU, no monitor, serial console only.
 
+### Board Hardware Reference
+
+For a detailed PCB reference — connectors, headers, IC inventory, and unpopulated variant hardware — see **[docs/board-reference.md](docs/board-reference.md)**.
+
 ### Findings:
 
 * The theoretical throughput of this device, while using all CPUs onboard, is ~750mbps give or take. Single-core performance is ~350-500mbps.
