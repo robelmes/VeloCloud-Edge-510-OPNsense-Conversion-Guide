@@ -145,7 +145,7 @@ The mini-USB port under the side cover exposes **two hardware UARTs** via an int
 - **COM1 (0x3F8)** — FreeBSD calls this `ttyu0`, and it's where the FreeBSD kernel sends its console output by default
 - **COM2 (0x2F8)** — FreeBSD calls this `ttyu1`, and this is the port that coreboot and the FreeBSD bootloader use for their output
 
-Without any fixes, you'd see bootloader/module-loading output (from COM2) but then silence during OPNsense startup (which goes to COM1), followed by a login prompt on COM2 — but root login would silently fail.
+Without any fixes, you'd see bootloader/module-loading output (from COM2) but then silence during OPNsense startup (which goes to COM1). No login prompt ever appears — `getty` is configured for `ttyU1` (uppercase) but the actual FreeBSD device node is `ttyu1` (lowercase), so it can't open the port.
 
 The fixes below address both issues and persist across reboots.
 
