@@ -138,6 +138,9 @@ Allow it to install, then change your root password (please lord god do this lol
 
 After installing OPNsense, you can manage the device entirely over serial — no GPU, no HDMI, no monitor needed. However, there are two OPNsense quirks that need fixing before serial login works properly.
 
+> **Tested on:** OPNsense 26.1.6_2 (amd64)
+> These issues have been reported to the OPNsense project as [opnsense/core#10463](https://github.com/opnsense/core/issues/10463). Check that issue to see if a fix has been merged — if so, some or all of the steps below may no longer be necessary.
+
 ### Background: How the serial port works on this hardware
 
 The mini-USB port under the side cover exposes **two hardware UARTs** via an internal USB-to-serial chip:
