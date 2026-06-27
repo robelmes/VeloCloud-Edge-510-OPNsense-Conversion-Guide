@@ -38,21 +38,21 @@ processor is confirmed x86 (FreeBSD/amd64 runs natively via coreboot).
 | J3 | Solder pad array | 10 | No | Unknown — connector footprint not fitted in production |
 | J4 | USB-A | — | Yes | USB-A port |
 | **J5** | Pin header | 5 | Yes | **Probable UART debug header** — direct serial access to SoC |
-| J6 | Solder pads | 3 | No | Unknown — next to mini-PCIe screw, near SoC |
+| J6 | Pin header | 3 | No (unpopulated) | Unknown — next to mini-PCIe screw, near SoC |
 | J7 | USB-A | — | Yes | USB-A port |
 | J8 | Solder pad array | 20 | No | Unknown — GPIO/expansion footprint, not fitted in production |
 | J9 | Pin header | 3 | Yes | Unknown — power/reset area near TPM |
 | J10 | DC barrel jack | — | Yes | Power input |
 | J11 | 4× RJ45 | — | Yes | LAN ports (front panel) |
 | J13 | Solder pad array | 75 | No | **M.2 cellular modem slot** (B/M-key, paired with J22 SIM) |
-| J14 | Solder pads | 3 | No | Unknown — near USB-to-serial conversion circuitry |
+| J14 | Pin header | 3 | No (unpopulated) | Unknown — near USB-to-serial conversion circuitry |
 | J15 | Pin header | 3 | Yes | Unknown — near USB-to-serial conversion circuitry |
 | J16 | Pin header | 3 | Yes | Unknown — near USB-to-serial conversion circuitry |
 | J17 | USB-A | — | Yes | Internal USB-A (serial conversion chain) |
 | J18 | M.2 slot | — | Yes | **M.2 slot** — storage SSD |
 | J19 | mini-PCIe | — | Yes | mini-PCIe slot (WLE600VX wireless card fitted as standard) |
 | J20 | Pin header | 8 (2×4) | Yes | **Probable JTAG / SPI programming interface** (next to SPI flash U54) |
-| J21 | Solder pads | 3 | No | Unknown — near J9, power management area |
+| J21 | Pin header | 3 | No (unpopulated) | Unknown — near J9, power management area |
 | J22 | SIM card slot | — | Yes | SIM slot — paired with J13 cellular M.2 |
 
 > J1, J2, J12 were not identified from available photos — may be on the underside or obscured.
