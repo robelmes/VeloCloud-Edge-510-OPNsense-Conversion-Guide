@@ -429,10 +429,18 @@ def build_install_script(root_password: str) -> str:
         # on first boot — no post-install SSH needed.
         log "Applying serial console fix…"
 
-        # 1. loader.conf.local: redirect kernel console to COM2 (0x2f8)
-        #    coreboot uses COM2; FreeBSD defaults to COM1 (0x3f8)
-        printf '%s\\n' 'comconsole_port="0x2f8"' > "$BSDINSTALL_CHROOT/boot/loader.conf.local"
-        log "  loader.conf.local: comconsole_port=0x2f8"
+        # 1. loader.conf.local: redirect kernel console to COM2 (0x2f8 = ttyu1)
+        #    coreboot uses COM2; FreeBSD defaults to COM1 (0x3f8).
+        #    hint.uart overrides are required because device.hints marks uart0
+        #    (COM1) as the console device (flags=0x10); we must clear that and
+        #    set the flag on uart1 (COM2) so the kernel uses the correct port.
+        cat > "$BSDINSTALL_CHROOT/boot/loader.conf.local" << 'LOADEREOF'
+comconsole_port="0x2f8"
+comconsole_speed="115200"
+hint.uart.0.flags="0x0"
+hint.uart.1.flags="0x10"
+LOADEREOF
+        log "  loader.conf.local: comconsole=COM2 (0x2f8/ttyu1) with uart hint overrides"
 
         # 2. config.xml: set serial console + enable SSH (root/password/LAN)
         if [ -f "$BSDINSTALL_CHROOT/conf/config.xml" ]; then
@@ -683,14 +691,14 @@ def phase2_install(opnsense_ip: str, root_password: str | None) -> str:
 
     client.close()
 
-    if exit_code == 0 or exit_code is None:
+    # exit_code -1 is normal: the install script ends with `reboot`, which
+    # kills the SSH channel before it can return 0.
+    if exit_code in (0, -1, None):
         ok("Install script completed successfully.")
     else:
-        warn(f"Install script exited with code {exit_code}.")
-        warn("Check the output above for errors.")
-        ans = input("  Continue to Phase 3 anyway? [y/N] ").strip().lower()
-        if ans != "y":
-            sys.exit(1)
+        warn(f"Install script exited with code {exit_code} — check output above.")
+        # Don't block on input() — we may not have a tty (piped/logged runs).
+        # Phase 3 will verify success via serial; proceed regardless.
 
     return root_password
 
@@ -713,8 +721,8 @@ def phase3_verify(serial_port: str | None) -> None:
             Check your serial terminal manually:
               • When 'Press F12 for boot menu' appears, press F12
               • Select option 2 (Generic Ultra HS-COMBO = eMMC)
-              • A 'login:' prompt should appear on COM2 (the mini-USB port)
-              • Login as: root / <your new password>
+              • The OPNsense management console should appear on COM2 (mini-USB port)
+              • Serial: 115200 8N1 on ttyu1 (COM2 / 0x2f8)
         """)
         return
 
@@ -739,15 +747,18 @@ def phase3_verify(serial_port: str | None) -> None:
         ok(f"Boot menu open — selecting option {EMMC_BOOT_CHOICE} (eMMC)…")
         ser.write(EMMC_BOOT_CHOICE.encode() + b"\r")
 
-        # ── Step 2: wait for OPNsense login prompt ────────────────────────────
-        info("Booting from eMMC — waiting for OPNsense login prompt (up to 4 min)…\n")
+        # ── Step 2: wait for OPNsense console banner ─────────────────────────
+        # OPNsense shows its management menu directly on the console at boot —
+        # there is no raw "login:" prompt. The banner line is:
+        #   *** OPNsense.internal: OPNsense 26.x.x (amd64) ***
+        info("Booting from eMMC — waiting for OPNsense console banner (up to 4 min)…\n")
         console.expect(
-            [r"login:", r"ogin:", r"ttyu1 login"],
+            [r"\*\*\* OPNsense", r"OPNsense \d+\.", r"login:", r"ogin:"],
             timeout=240,
         )
         print()
-        ok("🎉  Login prompt detected! OPNsense is running from eMMC.")
-        info("Login with:  root / <your password>")
+        ok("🎉  OPNsense is running from eMMC — console confirmed!")
+        info("The serial port (mini-USB) shows the OPNsense management menu.")
 
         ser.close()
 
