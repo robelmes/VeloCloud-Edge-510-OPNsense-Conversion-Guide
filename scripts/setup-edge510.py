@@ -90,6 +90,11 @@ COREBOOT_URL        = (
     "PhoenixSheppy/VeloCloud-Edge-510-OPNsense-Conversion-Guide/"
     "refs/heads/main/firmware/2017-4-10-coreboot.rom"
 )
+# Local server alternative — used when this machine serves the ROM directly.
+# Start with:  cd tmp/rom-serve && python3 -m http.server 8888
+LOCAL_ROM_SERVER_IP   = "192.168.1.100"  # enp14s0f0.3999 — Edge 510 traffic arrives VLAN 3999 tagged via switch
+LOCAL_ROM_SERVER_PORT = 8888
+LOCAL_ROM_URL         = f"http://{LOCAL_ROM_SERVER_IP}:{LOCAL_ROM_SERVER_PORT}/2017-4-10-coreboot.rom"
 ROM_DIR             = "illegal-firmware"
 ROM_FILE            = f"{ROM_DIR}/2017-4-10-coreboot.rom"
 
@@ -107,6 +112,17 @@ SERIAL_CONSOLE_XML  = {
     "primaryconsole":   "serial",
     "secondaryconsole": "serial",
     "serialspeed":      "115200",
+}
+
+# SSH config.xml fields — written into the <ssh> child of <system>
+# Enables SSH server, root login with password, listening on LAN only.
+SSH_XML  = {
+    "enabled":       "enabled",
+    "passwordauth":  "1",
+    "permitrootlogin": "1",
+    "interfaces":    "lan",
+    "group":         "admins",
+    "noauto":        "1",
 }
 
 # ---------------------------------------------------------------------------
@@ -259,15 +275,23 @@ def build_install_script(root_password: str) -> str:
     xml_tags = ", ".join(
         f"('{tag}', '{val}')" for tag, val in SERIAL_CONSOLE_XML.items()
     )
+    ssh_tags = ", ".join(
+        f"('{tag}', '{val}')" for tag, val in SSH_XML.items()
+    )
     xml_patch_cmd = (
         "python3 -c \""
         "import xml.etree.ElementTree as ET; "
+        "SE = ET.SubElement; "
         "ET.register_namespace('', ''); "
         "tree = ET.parse('/mnt/conf/config.xml'); "
         "root = tree.getroot(); "
         "sys = root.find('system'); "
-        f"[setattr(__import__('xml.etree.ElementTree', fromlist=['SubElement']).SubElement(sys, t) if sys.find(t) is None else sys.find(t), 'text', v) or None for t, v in [{xml_tags}]]; "
+        # Serial console fields on <system>
+        f"[setattr(sys.find(t) if sys.find(t) is not None else SE(sys, t), 'text', v) for t, v in [{xml_tags}]]; "
         "[sys.remove(sys.find(b)) for b in ['serialusb', 'enableserial'] if sys.find(b) is not None]; "
+        # SSH fields on <system><ssh>
+        "ssh = sys.find('ssh') if sys.find('ssh') is not None else SE(sys, 'ssh'); "
+        f"[setattr(ssh.find(t) if ssh.find(t) is not None else SE(ssh, t), 'text', v) for t, v in [{ssh_tags}]]; "
         "tree.write('/mnt/conf/config.xml', xml_declaration=True, encoding='unicode')"
         "\""
     )
@@ -305,23 +329,50 @@ def build_install_script(root_password: str) -> str:
             TARGETDISK=mmcsd0
             log "Internal eMMC detected as mmcsd0"
         else
-            # Fall back: boot device is the USB installer
-            BOOTDEV=$(df / 2>/dev/null | awk 'NR>1{{split($1,a,"/"); print a[3]}}' | sed 's/p[0-9]*$//; s/s[0-9]$//')
-            log "Boot device: $BOOTDEV"
+            # On this hardware the live OPNsense installer runs from a memory filesystem
+            # (root is md/tmpfs, not da0), so df / doesn't reliably give the USB device.
+            # Instead: skip any disk whose description contains known USB brand strings,
+            # then take the FIRST remaining candidate (da1 = eMMC comes before da0 = USB
+            # in kern.disks because it was enumerated first).
             TARGETDISK=""
             for disk in $ALLDISKS; do
-                if [ "$disk" != "$BOOTDEV" ]; then
-                    TARGETDISK="$disk"
-                    log "Candidate target disk: $disk"
+                DESC=$(geom disk list "$disk" 2>/dev/null | awk '/descr/ {{print $0}}' || true)
+                if echo "$DESC" | grep -qiE 'USB|SanDisk|Kingston|Verbatim|PNY|Patriot|Lexar|Transcend|TOSHIBA USB|Generic.*Flash'; then
+                    log "Skipping USB device: $disk ($DESC)"
+                    continue
                 fi
+                TARGETDISK="$disk"
+                log "Candidate target disk: $disk"
+                break
             done
+
+            # Last-resort: use first disk that is NOT the OPNsense installer USB
+            # (identified by having fewer partitions than the eMMC — installer has 4, eMMC has 6+)
+            if [ -z "$TARGETDISK" ]; then
+                log "USB brand detection failed; falling back to partition-count heuristic…"
+                for disk in $ALLDISKS; do
+                    NPARTS=$(gpart show "$disk" 2>/dev/null | grep -c '^\s' || echo 0)
+                    log "  $disk: $NPARTS partitions"
+                    if [ "$NPARTS" -gt 4 ]; then
+                        TARGETDISK="$disk"
+                        log "Selected $disk (has $NPARTS partitions — likely eMMC)"
+                        break
+                    fi
+                done
+            fi
         fi
 
         [ -z "$TARGETDISK" ] && die "No target disk found. Available: $ALLDISKS"
 
         # Show disk info so we can verify in the log
         log "Target disk: $TARGETDISK"
-        geom disk list "$TARGETDISK" 2>/dev/null | grep -E 'Geom|Mediasize|descr' || true
+        TARGETDESC=$(geom disk list "$TARGETDISK" 2>/dev/null | grep -E 'Geom|Mediasize|descr' || true)
+        log "$TARGETDESC"
+
+        # Hard safety: refuse to target any disk whose description screams "USB flash drive"
+        if echo "$TARGETDESC" | grep -qiE 'USB|SanDisk|Kingston|Verbatim|PNY|Patriot|Lexar|Transcend'; then
+            die "SAFETY ABORT: $TARGETDISK looks like a USB flash drive. Will not install to it. Description: $TARGETDESC"
+        fi
 
         # Safety: refuse to target a disk smaller than 4GB
         DISKSIZE=$(geom disk list "$TARGETDISK" 2>/dev/null | awk '/Mediasize/ {{print $2}}')
@@ -383,11 +434,10 @@ def build_install_script(root_password: str) -> str:
         printf '%s\\n' 'comconsole_port="0x2f8"' > "$BSDINSTALL_CHROOT/boot/loader.conf.local"
         log "  loader.conf.local: comconsole_port=0x2f8"
 
-        # 2. config.xml: set primaryconsole/secondaryconsole to serial,
-        #    remove serialusb (causes ttyU vs ttyu mismatch on this hardware)
+        # 2. config.xml: set serial console + enable SSH (root/password/LAN)
         if [ -f "$BSDINSTALL_CHROOT/conf/config.xml" ]; then
             {xml_patch_cmd}
-            log "  config.xml: primaryconsole/secondaryconsole → serial, serialusb removed"
+            log "  config.xml: serial console + SSH (root/password/LAN) configured"
         else
             log "  WARNING: config.xml not found in chroot — skipping XML patch"
         fi
@@ -408,8 +458,7 @@ def build_install_script(root_password: str) -> str:
         log "Unmounting…"
         bsdinstall umount || die "umount failed"
 
-        log "Install complete. Rebooting in 3 seconds…"
-        sleep 3
+        log "Install complete. Rebooting…"
         reboot
     """)
 
@@ -426,8 +475,8 @@ def phase1_velocloud(serial_port: str, sn_suffix: str, skip_download: bool) -> N
     step(f"Opening {serial_port} at {BAUD_RATE} baud…")
     ser = _serial.Serial(serial_port, BAUD_RATE, timeout=0.5)
     console = pexpect.fdpexpect.fdspawn(
-        ser.fileno(), logfile=sys.stdout.buffer,
-        encoding="utf-8", timeout=60,
+        ser.fileno(), logfile=sys.stdout,
+        encoding="latin-1", timeout=60,
     )
 
     instructions("""
@@ -436,7 +485,13 @@ def phase1_velocloud(serial_port: str, sn_suffix: str, skip_download: bool) -> N
         Waiting for the login prompt (up to 3 minutes)…
     """)
 
-    console.expect([r"login:", r"VeloCloud login:"], timeout=180)
+    # Send Enter proactively — VeloCloud OS may need it to activate the console.
+    # Then wait for whichever prompt arrives first.
+    console.sendline("")
+    idx = console.expect([r"Please press Enter", r"login:", r"VeloCloud login:"], timeout=180)
+    if idx == 0:
+        console.sendline("")
+        console.expect([r"login:", r"VeloCloud login:"], timeout=30)
     console.sendline("root")
     console.expect(r"[Pp]assword:", timeout=10)
     console.sendline(password)
@@ -446,29 +501,88 @@ def phase1_velocloud(serial_port: str, sn_suffix: str, skip_download: bool) -> N
     console.sendline("cd /root")
     console.expect(VELOCLOUD_PROMPT, timeout=10)
 
-    # Network check
-    step("Checking network connectivity (GE/4 should have an ethernet cable)…")
-    console.sendline("ping -c 3 -t 10 8.8.8.8")
-    idx = console.expect(
-        [r"3 packets transmitted", r"Network is unreachable", r"ping: cannot resolve"],
-        timeout=30,
+    # Network setup — configure a static IP on ge3 (GE/4, WAN port) so VeloCloud
+    # OS can reach this machine's local HTTP server (no internet required).
+    # This machine must have an IP on the parent (untagged) interface:
+    #   sudo ip addr add 192.168.1.101/24 dev enp14s0f0
+    step("Configuring VeloCloud OS network to reach local ROM server…")
+    vc_ip    = "192.168.1.200"
+    vc_gw    = LOCAL_ROM_SERVER_IP
+    vc_iface = None
+
+    # Find interfaces with link/carrier first, then try all ge* as fallback.
+    console.sendline(
+        "for i in /sys/class/net/ge*; do "
+        "  iface=$(basename $i); "
+        "  carrier=$(cat $i/carrier 2>/dev/null); "
+        "  echo $iface:$carrier; "
+        "done"
     )
-    if idx != 0:
-        instructions("""
-            Network is not available on GE/4.
-            Plug an ethernet cable from your router/switch into the
-            rightmost (GE/4) ethernet port and wait a few seconds.
-        """)
-        pause("Press Enter to retry the network check…")
-        console.sendline("ping -c 3 8.8.8.8")
-        console.expect(r"3 packets transmitted", timeout=30)
-    ok("Network is reachable.")
+    console.expect(VELOCLOUD_PROMPT, timeout=10)
+    carrier_raw = console.before or ""
+    # Interfaces with carrier=1 first, then others
+    with_carrier = [l.split(":")[0] for l in carrier_raw.splitlines()
+                    if ":1" in l and l.split(":")[0].startswith("ge")]
+    all_ge = [l.split(":")[0] for l in carrier_raw.splitlines()
+              if l.split(":")[0].startswith("ge")]
+    candidates = with_carrier + [g for g in all_ge if g not in with_carrier]
+    if not candidates:
+        candidates = ["ge3", "ge4", "ge0", "ge1", "ge2"]
+    info(f"Interface candidates (carrier-first): {candidates}")
+
+    for iface in candidates:
+        console.sendline(f"ip addr flush dev {iface} 2>/dev/null; "
+                         f"ip addr add {vc_ip}/24 dev {iface}; "
+                         f"ip link set {iface} up; "
+                         f"ping -c 1 -w 3 {vc_gw}")
+        idx = console.expect(
+            [r"1 packets transmitted, 1 received", r"1 received", r"0 received",
+             r"unreachable", r"error", r"Cannot find"],
+            timeout=15,
+        )
+        console.expect(VELOCLOUD_PROMPT, timeout=10)
+        if idx <= 1:
+            vc_iface = iface
+            ok(f"Reached {vc_gw} via {iface} ({vc_ip}/24).")
+            break
+        # Clean up failed attempt
+        console.sendline(f"ip addr flush dev {iface} 2>/dev/null")
+        console.expect(VELOCLOUD_PROMPT, timeout=5)
+
+    if not vc_iface:
+        print(f"\n❌  Could not reach {vc_gw} on any interface.")
+        print("    Check ethernet cable is in one of the GE ports and that")
+        print(f"    this machine has an IP in the 192.168.1.x subnet.")
+        sys.exit(1)
+
+    for iface in candidates:
+        console.sendline(f"ip addr flush dev {iface} 2>/dev/null; "
+                         f"ip addr add {vc_ip}/24 dev {iface}; "
+                         f"ip link set {iface} up; "
+                         f"ping -c 1 -w 3 {vc_gw}")
+        idx = console.expect(
+            [r"1 packets transmitted, 1 received", r"1 received", r"0 received",
+             r"unreachable", r"error"],
+            timeout=15,
+        )
+        console.expect(VELOCLOUD_PROMPT, timeout=10)
+        if idx <= 1:
+            vc_iface = iface
+            ok(f"Reached {vc_gw} via {iface} ({vc_ip}/24).")
+            break
+        # Clean up failed attempt
+        console.sendline(f"ip addr flush dev {iface} 2>/dev/null")
+        console.expect(VELOCLOUD_PROMPT, timeout=5)
+
+    if not vc_iface:
+        die(f"Could not reach {vc_gw} on any interface. "
+            "Check ethernet cable is in the GE/4 (rightmost) port.")
 
     if not skip_download:
-        step(f"Creating {ROM_DIR}/ and downloading coreboot ROM (~4 MB)…")
+        step(f"Creating {ROM_DIR}/ and downloading coreboot ROM from local server…")
         console.sendline(f"mkdir -p {ROM_DIR}")
         console.expect(VELOCLOUD_PROMPT, timeout=10)
-        console.sendline(f"wget -q '{COREBOOT_URL}' -O {ROM_FILE}")
+        console.sendline(f"wget -q '{LOCAL_ROM_URL}' -O {ROM_FILE}")
         console.expect(VELOCLOUD_PROMPT, timeout=120)
         ok("ROM downloaded.")
 
@@ -538,7 +652,6 @@ def phase2_install(opnsense_ip: str, root_password: str | None) -> str:
               • Your machine has an IP in the 192.168.1.x/24 range
               • The device has fully booted (wait another 30 s and retry)
         """)
-        pause("Fix connectivity then press Enter to retry…")
         if not wait_for_tcp(opnsense_ip, LIVE_SSH_PORT, timeout=60):
             warn("Still cannot connect. Exiting.")
             sys.exit(1)
@@ -583,47 +696,66 @@ def phase2_install(opnsense_ip: str, root_password: str | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Phase 3 — Verify via serial console
+# Phase 3 — Boot menu selection + serial console verify
 # ---------------------------------------------------------------------------
 
+# SeaBIOS boot menu entry for the eMMC (always option 2 on Edge 510):
+#   1. USB MSC Drive  USB SanDisk 3.2Gen1   ← installer USB
+#   2. USB MSC Drive Generic Ultra HS-COMBO ← eMMC (internal)
+EMMC_BOOT_CHOICE = "2"
+
 def phase3_verify(serial_port: str | None) -> None:
-    banner("PHASE 3 — Verify serial console")
+    banner("PHASE 3 — Boot menu + serial console verify")
 
     if not serial_port:
         instructions("""
             Skipping serial monitoring (no --serial port specified).
             Check your serial terminal manually:
-              • You should see the full coreboot + OPNsense boot sequence
+              • When 'Press F12 for boot menu' appears, press F12
+              • Select option 2 (Generic Ultra HS-COMBO = eMMC)
               • A 'login:' prompt should appear on COM2 (the mini-USB port)
               • Login as: root / <your new password>
         """)
         return
 
-    info(f"Monitoring {serial_port} at {BAUD_RATE} baud for OPNsense boot output.")
-    info("You should see: coreboot → bootloader → OPNsense boot → login prompt.")
-    info("Waiting up to 4 minutes…\n")
+    info(f"Monitoring {serial_port} at {BAUD_RATE} baud…")
+    info("Will intercept SeaBIOS F12 boot menu to select eMMC, then verify login prompt.")
+    info("Waiting up to 3 minutes for boot menu…\n")
 
     try:
         ser = _serial.Serial(serial_port, BAUD_RATE, timeout=1)
         console = pexpect.fdpexpect.fdspawn(
-            ser.fileno(), logfile=sys.stdout.buffer,
-            encoding="utf-8", timeout=10,
+            ser.fileno(), logfile=sys.stdout,
+            encoding="latin-1", timeout=10,
         )
-        idx = console.expect(
+
+        # ── Step 1: intercept SeaBIOS F12 boot menu ──────────────────────────
+        console.expect(r"Press F12 for boot menu", timeout=180)
+        print()
+        ok("SeaBIOS F12 prompt detected — sending F12 to open boot menu…")
+        ser.write(b"\x1b[24~")   # F12 VT220 escape sequence
+
+        console.expect(r"Select boot device", timeout=10)
+        ok(f"Boot menu open — selecting option {EMMC_BOOT_CHOICE} (eMMC)…")
+        ser.write(EMMC_BOOT_CHOICE.encode() + b"\r")
+
+        # ── Step 2: wait for OPNsense login prompt ────────────────────────────
+        info("Booting from eMMC — waiting for OPNsense login prompt (up to 4 min)…\n")
+        console.expect(
             [r"login:", r"ogin:", r"ttyu1 login"],
             timeout=240,
         )
-        if idx >= 0:
-            print()
-            ok("🎉  Login prompt detected on serial! Serial console is working correctly.")
-            info("Login with:  root / <your password>")
+        print()
+        ok("🎉  Login prompt detected! OPNsense is running from eMMC.")
+        info("Login with:  root / <your password>")
+
         ser.close()
+
     except pexpect.TIMEOUT:
-        warn("Timed out waiting for login prompt.")
-        warn("The serial fix may not have applied. Check the output above for errors.")
-        warn("You can still SSH in and apply the fix manually — see README Step 7.")
+        warn("Timed out — check serial output above for clues.")
+        warn("You can manually press F12 at boot and select option 2 (eMMC).")
     except Exception as exc:
-        warn(f"Serial monitoring error: {exc}")
+        warn(f"Serial error: {exc}")
 
 
 # ---------------------------------------------------------------------------
