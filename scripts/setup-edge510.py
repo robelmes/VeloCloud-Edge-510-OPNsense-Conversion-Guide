@@ -466,8 +466,7 @@ LOADEREOF
         log "Unmounting…"
         bsdinstall umount || die "umount failed"
 
-        log "Install complete. Rebooting…"
-        reboot
+        log "Install complete."
     """)
 
 
@@ -689,46 +688,90 @@ def phase2_install(opnsense_ip: str, root_password: str | None) -> str:
     script = build_install_script(root_password)
     exit_code = upload_and_run(client, script, timeout=900)
 
-    client.close()
-
-    # exit_code -1 is normal: the install script ends with `reboot`, which
-    # kills the SSH channel before it can return 0.
+    # exit_code -1 is normal if SSH drops unexpectedly; 0 = clean exit.
     if exit_code in (0, -1, None):
         ok("Install script completed successfully.")
     else:
         warn(f"Install script exited with code {exit_code} — check output above.")
-        # Don't block on input() — we may not have a tty (piped/logged runs).
-        # Phase 3 will verify success via serial; proceed regardless.
 
-    return root_password
+    # ── USB removal prompt (attended vs unattended) ───────────────────────────
+    # Attended:   user removes USB, presses Enter → device boots eMMC directly
+    # Unattended: prompt times out → USB stays in → Phase 3 must F12 to eMMC
+    USB_PROMPT_TIMEOUT = 120  # seconds
+    usb_removed = False
+    print()
+    print("=" * 70)
+    print("  Remove the USB installer stick, then press Enter to reboot.")
+    print(f"  (Auto-reboot in {USB_PROMPT_TIMEOUT}s if no input — USB-in mode, F12 will be used)")
+    print("=" * 70)
+    import select as _select
+    rlist, _, _ = _select.select([sys.stdin], [], [], USB_PROMPT_TIMEOUT)
+    if rlist:
+        sys.stdin.readline()   # consume the Enter
+        usb_removed = True
+        ok("USB removed — rebooting into eMMC directly.")
+    else:
+        print()
+        info("Timeout reached — rebooting with USB in place; Phase 3 will F12 to eMMC.")
+
+    # Reconnect and reboot
+    try:
+        client2 = paramiko.SSHClient()
+        client2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client2.connect(opnsense_ip, username="root", password=root_password,
+                        timeout=10, allow_agent=False, look_for_keys=False)
+        client2.exec_command("reboot")
+        client2.close()
+    except Exception:
+        pass   # SSH drops when reboot fires — that's expected
+    ok("Reboot command sent.")
+
+    client.close()
+    return root_password, usb_removed
 
 
 # ---------------------------------------------------------------------------
 # Phase 3 — Boot menu selection + serial console verify
 # ---------------------------------------------------------------------------
 
-# SeaBIOS boot menu entry for the eMMC (always option 2 on Edge 510):
-#   1. USB MSC Drive  USB SanDisk 3.2Gen1   ← installer USB
-#   2. USB MSC Drive Generic Ultra HS-COMBO ← eMMC (internal)
-EMMC_BOOT_CHOICE = "2"
+# Device string SeaBIOS uses for the eMMC on the Edge 510.
+# This substring is matched against boot menu entries to find the right option
+# regardless of how many USB sticks are plugged in (or none at all).
+EMMC_DEVICE_STRING = "HS-COMBO"
 
-def phase3_verify(serial_port: str | None) -> None:
+
+def _parse_seabios_menu(menu_text: str) -> str | None:
+    """Return the option number whose label contains EMMC_DEVICE_STRING, or None."""
+    for line in menu_text.splitlines():
+        line = line.strip()
+        if EMMC_DEVICE_STRING in line:
+            # Lines look like: "2. USB MSC Drive Generic Ultra HS-COMBO"
+            parts = line.split(".", 1)
+            if parts[0].strip().isdigit():
+                return parts[0].strip()
+    return None
+
+
+def phase3_verify(serial_port: str | None, usb_removed: bool = False) -> None:
     banner("PHASE 3 — Boot menu + serial console verify")
 
     if not serial_port:
         instructions("""
             Skipping serial monitoring (no --serial port specified).
             Check your serial terminal manually:
-              • When 'Press F12 for boot menu' appears, press F12
-              • Select option 2 (Generic Ultra HS-COMBO = eMMC)
+              • If USB is still in: press F12 and select 'Generic Ultra HS-COMBO' (eMMC)
+              • If USB was removed: device boots eMMC automatically
               • The OPNsense management console should appear on COM2 (mini-USB port)
               • Serial: 115200 8N1 on ttyu1 (COM2 / 0x2f8)
         """)
         return
 
     info(f"Monitoring {serial_port} at {BAUD_RATE} baud…")
-    info("Will intercept SeaBIOS F12 boot menu to select eMMC, then verify login prompt.")
-    info("Waiting up to 3 minutes for boot menu…\n")
+    if usb_removed:
+        info("USB removed — device will boot eMMC directly (no F12 needed).")
+    else:
+        info("USB in place — will intercept SeaBIOS F12 menu and select eMMC by label.")
+    info("Waiting up to 3 minutes for boot output…\n")
 
     try:
         ser = _serial.Serial(serial_port, BAUD_RATE, timeout=1)
@@ -737,15 +780,38 @@ def phase3_verify(serial_port: str | None) -> None:
             encoding="latin-1", timeout=10,
         )
 
-        # ── Step 1: intercept SeaBIOS F12 boot menu ──────────────────────────
-        console.expect(r"Press F12 for boot menu", timeout=180)
-        print()
-        ok("SeaBIOS F12 prompt detected — sending F12 to open boot menu…")
-        ser.write(b"\x1b[24~")   # F12 VT220 escape sequence
+        # ── Step 1: SeaBIOS F12 boot menu (only if USB is still plugged in) ────
+        if not usb_removed:
+            console.expect(r"Press F12 for boot menu", timeout=180)
+            print()
+            ok("SeaBIOS F12 prompt detected — sending F12 to open boot menu…")
+            ser.write(b"\x1b[24~")   # F12 VT220 escape sequence
 
-        console.expect(r"Select boot device", timeout=10)
-        ok(f"Boot menu open — selecting option {EMMC_BOOT_CHOICE} (eMMC)…")
-        ser.write(EMMC_BOOT_CHOICE.encode() + b"\r")
+            console.expect(r"Select boot device", timeout=10)
+            ok("Boot menu open — reading entries…")
+
+            # Read menu lines for up to 3 seconds (SeaBIOS prints them quickly).
+            # We accumulate everything in the pexpect buffer then parse.
+            import time as _time
+            _time.sleep(3)
+            # Drain whatever arrived by expecting something that won't match.
+            try:
+                console.expect(r"NOMATCH_SENTINEL_XYZ", timeout=0.1)
+            except pexpect.TIMEOUT:
+                pass
+            menu_text = (console.before or "") + (console.after or "")
+
+            choice = _parse_seabios_menu(menu_text)
+            if choice:
+                ok(f"Found eMMC ('{EMMC_DEVICE_STRING}') at option {choice} — selecting…")
+                ser.write(choice.encode() + b"\r")
+            else:
+                warn(f"Could not find '{EMMC_DEVICE_STRING}' in boot menu — menu was:")
+                warn(menu_text.strip())
+                warn("If only eMMC is present SeaBIOS may boot it automatically.")
+                warn("Continuing to watch for OPNsense banner…")
+        else:
+            info("Skipping F12 (USB removed) — waiting for eMMC to boot…\n")
 
         # ── Step 2: wait for OPNsense console banner ─────────────────────────
         # OPNsense shows its management menu directly on the console at boot —
@@ -764,7 +830,7 @@ def phase3_verify(serial_port: str | None) -> None:
 
     except pexpect.TIMEOUT:
         warn("Timed out — check serial output above for clues.")
-        warn("You can manually press F12 at boot and select option 2 (eMMC).")
+        warn(f"Manually press F12 at boot and select the '{EMMC_DEVICE_STRING}' entry.")
     except Exception as exc:
         warn(f"Serial error: {exc}")
 
@@ -845,10 +911,12 @@ def main() -> None:
         phase1_velocloud(serial_port, args.sn_suffix, args.skip_download)
 
     if start_phase <= 2:
-        root_password = phase2_install(args.opnsense_ip, root_password)
+        root_password, usb_removed = phase2_install(args.opnsense_ip, root_password)
+    else:
+        usb_removed = False   # standalone Phase 3 run — assume USB in, use F12
 
     if start_phase <= 3:
-        phase3_verify(serial_port)
+        phase3_verify(serial_port, usb_removed=usb_removed)
         print_summary(args.opnsense_ip)
 
 
